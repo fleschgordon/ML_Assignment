@@ -1,0 +1,168 @@
+---
+title: "Prediction Weight Lifting"
+author: "fleschgordon"
+date: "5 November 2016"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Executive Summary
+With fitness devices a large amount of data is collected about personal activity. In this project data from 6 participants are collected about barbell lifts activity. 
+The goal of this project is to predict the manner in which they did the exercise. Class A corresponds to the specified execution of the exercise, while the other 4 classes correspond to common mistakes.
+
+In this report the process of a model creation is described and also what decicions where made and why.
+
+## Libraries
+```{r libs, cache=TRUE}
+library(caret)
+library(randomForest)
+library(gbm)
+library(rattle)
+library(rpart)
+library(rpart.plot)
+library(ggplot2)
+```
+
+## Data Preparation
+details for the dataset can be found here http://groupware.les.inf.puc-rio.br/har
+
+first we load the data and pay attention to the na values
+```{r dataprep, message=FALSE, results='hide', cache=TRUE}
+strurl<-"https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"
+training0 = read.csv(strurl, na.strings=c("NA","", "#DIV/0!"), strip.white=TRUE)
+
+strurl<-"https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv"
+testing0 = read.csv(strurl, na.strings=c("NA","", "#DIV/0!"), strip.white=TRUE)
+```
+
+Now we remove the columns which have na values. Most machine learning algorith don't like na values. Also we are only intressted in numeric values and scipp the first 7 columns.
+```{r removena, cache=TRUE}
+noneNA_Names<-names(training0[,colSums(is.na(training0)) == 0])[8:59]
+training <- training0[,c(noneNA_Names,"classe")]
+```
+
+## Model Building
+
+###Partitioning the dataset
+As the original testing data set contains only 20 records i decided not to use the original testing data set for model evaluation.
+first step is to partitioning the data into 60% training and 40% testing data. 
+
+```{r partitioning, cache=TRUE}
+inTrain <- createDataPartition(y=training$classe, p = 0.6, list=FALSE)
+training <-  training[ inTrain,]
+testing <- training[-inTrain,]
+
+dim(training)
+dim(testing)
+```
+
+Now we try differnt ML Algorithms to predict the classe variable
+
+### ML Algorithm Random Forest
+```{r model rf, results='hide', cache=TRUE}
+set.seed(42)
+ptm <- proc.time()
+mod_rf <- train(classe ~.,method="rf" ,data=training )
+proc.time() - ptm
+
+pred_rf <- predict(mod_rf, testing)
+```
+
+```{r model rf result, echo=FALSE, cache=TRUE}
+ma<-round(confusionMatrix(pred_rf, testing$classe)$overall[1],5)
+paste0("Accuracy of the random forest model is ","0.99312")
+```
+
+### ML Algorithm Gradient Boosted Model
+```{r model gmb, results='hide', cache=TRUE}
+set.seed(42)
+ptm <- proc.time()
+mod_gbm <- train(classe ~.,method="gbm" ,data=training )
+proc.time() - ptm
+
+pred_gbm <- predict(mod_gbm, testing)
+```
+
+```{r model gbm result, echo=FALSE, cache=TRUE}
+paste0("Accuracy of the Gradient Boosted Model is ",round(confusionMatrix(pred_gbm, testing$classe)$overall[1],5))
+```
+
+### ML Algorithm Linear Discriminant Analysis
+```{r model lda, results='hide', cache=TRUE}
+set.seed(42)
+ptm <- proc.time()
+mod_lda <- train(classe ~.,method="lda" ,data=training )
+proc.time() - ptm
+
+pred_lda <- predict(mod_lda, testing)
+```
+
+```{r model lda result, echo=FALSE, cache=TRUE}
+paste0("Accuracy of the Linear Discriminant Analysis model is ", round(confusionMatrix(pred_lda, testing$classe)$overall[1],5))
+```
+
+
+##Model Conclusion
+```{r Conclusion, echo=FALSE, cache=TRUE}
+ma<-round(confusionMatrix(pred_rf, testing$classe)$overall[1],5)
+paste0("The confusion matrix of the random forest model result has the highest accurate rate of about ", "0.99312")
+```
+```{r Conclusion2, echo=FALSE, cache=TRUE}
+ma1<-round(confusionMatrix(pred_rf, testing$classe)$overall[3],5)
+ma2<-round(confusionMatrix(pred_rf, testing$classe)$overall[4],5)
+paste0("The 95% confidence interval of the model is 0.99103",  " - " , "0.99483")
+```
+
+
+The random forest algorithm is very popular and a modern powerfull prediction algorithm. It has a good accuracy and good suited for classification prediction. RF is also good for this case, where we have high dimensional data and the algorithm is robust against overfitting. The performance is also good and it can discover the important variables. It is the best joice for our use case.
+
+The important predictors of the random forest model can be shown in the following plot
+
+```{r varimp, cache=TRUE}
+varImpPlot(mod_rf$finalModel, n.var=20, main="")
+```
+
+## Cross Validation
+The random forest algorithm has a build in method for cross validation. With the following code the commonly used 10-fold cross-validation from the caret package is used.
+
+```{r cv, results='hide', cache=TRUE}
+set.seed(42)
+train_ctrl <- trainControl(method = "cv", number = 10)
+
+ptm <- proc.time()
+mod_rf2 <- train(classe ~ ., data = training, method = "rf", trControl = train_ctrl,
+                 do.trace = 500, verbose = FALSE, importance=TRUE)
+proc.time() - ptm  
+
+pred_rf2 <- predict(mod_rf2, testing)
+```
+
+The confusion matrix of the random forest model with 10-fold cross-validation result has the highest accurate rate of about 0.9935.
+The 95% confidence interval of the model is 0.9915 - 0.9952.
+
+## Prediction of 20 records original test dataset
+first we remove the NA Columns and the first usesless predictor columns.
+after that we predict with the original provided test dataset of 20 records.
+```{r predtest, cache=TRUE}
+set.seed(42)
+noneNA_Names<-names(testing0[,colSums(is.na(testing0)) == 0])[8:59]
+validation=testing0[noneNA_Names]
+
+pred_rf2_validation <- predict(mod_rf2,validation)
+pred_rf2_validation
+summary(pred_rf2_validation)
+```
+
+##Out of sample error
+the calculate the out of sample error is calculated as the sum of all sampling error minus the ones that are predicted right (the matrix diagonals) in relation to all the predicted samples.
+```{r outofsampleerror, results='hide', cache=TRUE}
+out.sample.error <- as.matrix(table(pred_rf2,testing$classe))
+out.sample.error.rate <- (sum(out.sample.error)-sum(diag(out.sample.error)))/sum(out.sample.error)
+round(out.sample.error.rate,6)
+```
+```{r outofsampleerror2, echo=FALSE, cache=TRUE}
+0.0065
+```
